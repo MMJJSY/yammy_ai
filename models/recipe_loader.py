@@ -1,38 +1,74 @@
-recipes = [
-    {
-        "id": 1,
-        "name": "육개장",
-        "category": "국물",
-        "taste": "칼칼",
-        "ingredients": ["양지", "고사리", "대파", "고추기름"],
-        "steps": "소고기를 삶은 뒤 찢고, 고사리를 볶아 고추기름과 함께 끓인다."
-    },
-    {
-        "id": 2,
-        "name": "김치찌개",
-        "category": "국물",
-        "taste": "얼큰",
-        "ingredients": ["김치", "돼지고기", "두부"],
-        "steps": "돼지고기를 볶고 김치를 넣어 끓인 뒤 두부를 넣는다."
-    },
-    {
-        "id": 3,
-        "name": "짬뽕",
-        "category": "국물",
-        "taste": "매움",
-        "ingredients": ["오징어", "홍합", "야채"],
-        "steps": "해산물과 야채를 볶고 육수를 부어 끓인다."
-    }
-]
+from typing import List, Dict
+from app.db import get_connection
 
-def load_all_recipes():
-    """레시피 전체 반환"""
-    return recipes
+def _row_to_dict(columns, row):
+    result = {}
+    for col, value in zip(columns, row):
+        col = col.lower()
+        if hasattr(value, "read"):   # CLOB인 경우
+            result[col] = value.read()
+        else:
+            result[col] = value
+    return result
 
-def get_recipe_by_id(recipe_id:int):
-    """id로 레시피 검색"""
-    for r in recipes:
-        if r["id"] == recipe_id:
-            return r
-        
+def get_recipe_by_id(recipe_id: int) -> Dict | None:
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            recipe_id,
+            name,
+            serving,
+            time,
+            ingredient,
+            spicy_ingredient,
+            method
+        FROM recipe
+        WHERE recipe_id = :id
+    """, {"id": recipe_id})
+
+    row = cur.fetchone()
+
+    if not row:
+        cur.close()
+        conn.close()
         return None
+
+    columns = ["recipe_id", "name", "serving", "time",
+               "ingredient", "spicy_ingredient", "method"]
+
+    # CLOB 포함 row → dict 변환을 DB 연결이 살아 있을 때 해줌
+    result = _row_to_dict(columns, row)
+
+    cur.close()     # ← 이제 닫아도 됨
+    conn.close()
+
+    return result
+
+def get_all_recipes() -> List[Dict]:
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            recipe_id,
+            name,
+            serving,
+            time,
+            ingredient,
+            spicy_ingredient,
+            method
+        FROM recipe
+        ORDER BY recipe_id
+    """)
+
+    columns = [col[0] for col in cur.description]   # 컬럼 이름 가져오기
+    rows = cur.fetchall()
+
+    result = [_row_to_dict(columns, row) for row in rows]
+
+    cur.close()
+    conn.close()
+
+    return result
