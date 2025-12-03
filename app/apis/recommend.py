@@ -1,52 +1,40 @@
 from fastapi import APIRouter
+from uuid import uuid4
+
 from app.services.llm_client import analyze_text, normalize_tags
 from app.services.rule_adjust import rule_adjust
 from app.services.recommend_service import get_next_recipe
-from app.services.session_manager import get_seen, add_seen, get_last_seen
-from uuid import uuid4
+from app.services.session_manager import get_seen, add_seen
 
 router = APIRouter()
 
 @router.get("/recommend")
-def recommend(query: str, user_id: str):
+def recommend(query: str, user_id: str | None = None):
 
     if user_id is None:
         user_id = f"guest-{uuid4()}"
 
-    # 1) LLM 분석 (intent 포함)
-    raw = analyze_text(query)
-    intent = raw.get("intent", "query")  
+    # 1) LLM 태그 추출
+    raw_tags = analyze_text(query)
+    tags = normalize_tags(raw_tags)
 
-    # 2) 태그 정리 + 규칙 적용
-    tags = normalize_tags(raw)
+    # 2) 룰 기반 보정 (국-탕, 면-만두, 재료 보강 등)
     tags = rule_adjust(tags, query)
 
-    # 3) 유저가 이미 본 레시피 목록
+    # 3) 이 유저가 지금까지 본 레시피 목록
     seen_ids = get_seen(user_id)
 
-    # 4) intent 처리 로직
-    if intent == "reject":
-        last_id = get_last_seen(user_id)
-        if last_id:
-            add_seen(user_id, last_id)   
-
-  
-    # 5) 새 추천 생성
-    print(tags)
+    # 4) 추천 생성 (Softmax + seen 제외 로직 들어있는 상태)
     recipe = get_next_recipe(tags, seen_ids)
 
-    # 6) 추천된 레시피는 자동으로 seen 처리
-    print("SEEN IDS BEFORE:", seen_ids)
-    add_seen(user_id, recipe["recipe_id"])
-    print("SEEN IDS AFTER:", get_seen(user_id))
+    # 5) 본 레시피 기록
+    if recipe and "recipe_id" in recipe:
+        add_seen(user_id, recipe["recipe_id"])
 
- 
-    # 7) 응답 반환
     return {
-        "intent": intent,
         "query": query,
         "user_id": user_id,
         "tags": tags,
         "seen": get_seen(user_id),
-        "recipe": recipe
+        "recipe": recipe,
     }

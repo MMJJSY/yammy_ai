@@ -12,6 +12,7 @@ def _row_to_dict(columns, row):
     return result
 
 def get_recipe_by_id(recipe_id: int) -> Dict | None:
+    recipe_id = int(recipe_id)
     conn = get_connection()
     cur = conn.cursor()
 
@@ -46,6 +47,47 @@ def get_recipe_by_id(recipe_id: int) -> Dict | None:
 
     return result
 
+def get_categories_by_recipe_id(recipe_id: int) -> List[str]:
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT tc.type_name
+        FROM recipe_type_category rtc
+        JOIN type_category tc
+        ON rtc.type_id = tc.type_id
+        WHERE rtc.recipe_id = :rid
+    """, {"rid": recipe_id})
+
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    # [('국-탕',), ('찌개',)] → ['국-탕', '찌개']
+    return [r[0] for r in rows]
+
+def load_all_recipe_categories() -> Dict[int, List[str]]:
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT rtc.recipe_id, tc.type_name
+        FROM recipe_type_category rtc
+        JOIN type_category tc
+        ON rtc.type_id = tc.type_id
+        ORDER BY rtc.recipe_id
+    """)
+
+    rows = cur.fetchall()
+
+    mapping = {}
+    for rid, cname in rows:
+        mapping.setdefault(rid, []).append(cname)
+
+    cur.close()
+    conn.close()
+    return mapping
+
 def get_all_recipes() -> List[Dict]:
     conn = get_connection()
     cur = conn.cursor()
@@ -72,3 +114,4 @@ def get_all_recipes() -> List[Dict]:
     conn.close()
 
     return result
+
