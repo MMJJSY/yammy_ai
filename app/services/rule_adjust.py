@@ -1,6 +1,6 @@
 ALLOWED_CATEGORIES = [
     "밑반찬", "메인반찬", "국-탕", "찌개", "면-만두",
-    "밥-떡", "김치", "양식", "샐러드", "빵", "기타"
+    "밥-떡", "양식", "샐러드", "빵", "디저트, 간식"
 ]
 
 
@@ -29,11 +29,7 @@ def rule_adjust(tags: dict, query: str) -> dict:
         if not category:
             category = ["면-만두"]
 
-    # 3) 김치 명시 → 김치 카테고리 우선
-    if "김치" in q:
-        category = ["김치"]
-
-    # 4) category가 2개 이상이면 우선순위로 1개만 남기기
+    # 43) category가 2개 이상이면 우선순위로 1개만 남기기
     if len(category) > 1:
         priority = ["찌개", "국-탕", "면-만두", "메인반찬", "밑반찬"]
         picked = None
@@ -43,14 +39,14 @@ def rule_adjust(tags: dict, query: str) -> dict:
                 break
         category = [picked] if picked else category[:1]
 
-    # 5) 칼칼/얼큰 → 매운 재료 보정
+    # 4) 칼칼/얼큰 → 매운 재료 보정
     if any(k in q for k in ["칼칼", "얼큰", "맵게", "매콤"]):
         if "고춧가루" not in ingredients:
             ingredients.insert(0, "고춧가루")
         if "청양고추" not in ingredients:
             ingredients.insert(0, "청양고추")
 
-    # 6) 국물 언급 시 육수 보정
+    # 5) 국물 언급 시 육수 보정
     if any(k in q for k in ["국물", "국", "탕", "찌개"]) and "육수" not in ingredients:
         ingredients.append("육수")
 

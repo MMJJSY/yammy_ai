@@ -25,7 +25,7 @@ def recommend(query: str, user_id: str | None = None):
     seen_ids = get_seen(user_id)
 
     # 4) 추천 생성 (Softmax + seen 제외 로직 들어있는 상태)
-    recipe = get_next_recipe(tags, seen_ids)
+    recipe = get_next_recipe(query, tags, seen_ids)
 
     # 5) 본 레시피 기록
     if recipe and "recipe_id" in recipe:
