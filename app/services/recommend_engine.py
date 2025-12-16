@@ -47,21 +47,16 @@ CATEGORY_KEYWORDS = {
 # 🔥 재료 하드 필터용 함수 (핵심)
 # --------------------------------------------------------
 def recipe_contains_ingredients(recipe_id: int, ingredients: list[str]) -> bool:
-    """
-    레시피의 ingredient / spicy_ingredient 텍스트에
-    사용자가 명시한 재료가 모두 포함되는지 검사
-    """
     recipe = get_recipe_by_id(recipe_id)
     if not recipe:
         return False
 
     text = (
-        recipe.get("ingredient", "") + " " +
-        recipe.get("spicy_ingredient", "")
+        (recipe.get("ingredient") or "") + " " +
+        (recipe.get("spicy_ingredient") or "")
     )
 
     return all(ing in text for ing in ingredients)
-
 
 # --------------------------------------------------------
 # STEP 1. 후보 필터링 + query 강화
