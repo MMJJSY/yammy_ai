@@ -1,117 +1,59 @@
 from typing import List, Dict
-from app.db import get_connection
+import requests
 
-def _row_to_dict(columns, row):
-    result = {}
-    for col, value in zip(columns, row):
-        col = col.lower()
-        if hasattr(value, "read"):   # CLOB인 경우
-            result[col] = value.read()
-        else:
-            result[col] = value
-    return result
+BACKEND_URL = "http://localhost:8080"
+
 
 def get_recipe_by_id(recipe_id: int) -> Dict | None:
+    """
+    Spring 백엔드에서 레시피 단건 조회
+    """
     recipe_id = int(recipe_id)
-    conn = get_connection()
-    cur = conn.cursor()
 
-    cur.execute("""
-        SELECT
-            recipe_id,
-            name,
-            serving,
-            time,
-            ingredient,
-            spicy_ingredient,
-            method
-        FROM recipe
-        WHERE recipe_id = :id
-    """, {"id": recipe_id})
-
-    row = cur.fetchone()
-
-    if not row:
-        cur.close()
-        conn.close()
+    try:
+        resp = requests.get(
+            f"{BACKEND_URL}/api/recipes/{recipe_id}",
+            timeout=3
+        )
+    except requests.RequestException as e:
+        print(f"[ERROR] Backend request failed: {e}")
         return None
 
-    columns = ["recipe_id", "name", "serving", "time",
-               "ingredient", "spicy_ingredient", "method"]
+    if resp.status_code != 200:
+        return None
 
-    # CLOB 포함 row → dict 변환을 DB 연결이 살아 있을 때 해줌
-    result = _row_to_dict(columns, row)
-
-    cur.close()     # ← 이제 닫아도 됨
-    conn.close()
-
-    return result
+    return resp.json()
 
 def get_categories_by_recipe_id(recipe_id: int) -> List[str]:
-    conn = get_connection()
-    cur = conn.cursor()
+    resp = requests.get(
+        f"{BACKEND_URL}/api/recipes/{recipe_id}/categories",
+        timeout=3
+    )
 
-    cur.execute("""
-        SELECT tc.type_name
-        FROM recipe_type_category rtc
-        JOIN type_category tc
-        ON rtc.type_id = tc.type_id
-        WHERE rtc.recipe_id = :rid
-    """, {"rid": recipe_id})
+    if resp.status_code != 200:
+        return []
 
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-
-    # [('국-탕',), ('찌개',)] → ['국-탕', '찌개']
-    return [r[0] for r in rows]
+    return resp.json()   # ["국-탕", "찌개"]
 
 def load_all_recipe_categories() -> Dict[int, List[str]]:
-    conn = get_connection()
-    cur = conn.cursor()
+    resp = requests.get(
+        f"{BACKEND_URL}/api/recipes/categories",
+        timeout=5
+    )
 
-    cur.execute("""
-        SELECT rtc.recipe_id, tc.type_name
-        FROM recipe_type_category rtc
-        JOIN type_category tc
-        ON rtc.type_id = tc.type_id
-        ORDER BY rtc.recipe_id
-    """)
+    if resp.status_code != 200:
+        return {}
 
-    rows = cur.fetchall()
-
-    mapping = {}
-    for rid, cname in rows:
-        mapping.setdefault(rid, []).append(cname)
-
-    cur.close()
-    conn.close()
-    return mapping
+    return resp.json()
 
 def get_all_recipes() -> List[Dict]:
-    conn = get_connection()
-    cur = conn.cursor()
+    resp = requests.get(
+        f"{BACKEND_URL}/api/recipes",
+        timeout=5
+    )
 
-    cur.execute("""
-        SELECT
-            recipe_id,
-            name,
-            serving,
-            time,
-            ingredient,
-            spicy_ingredient,
-            method
-        FROM recipe
-        ORDER BY recipe_id
-    """)
+    if resp.status_code != 200:
+        return []
 
-    columns = [col[0] for col in cur.description]   # 컬럼 이름 가져오기
-    rows = cur.fetchall()
-
-    result = [_row_to_dict(columns, row) for row in rows]
-
-    cur.close()
-    conn.close()
-
-    return result
+    return resp.json()
 

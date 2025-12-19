@@ -1,10 +1,14 @@
 import requests
 import re
+from typing import Optional, List
 
 OLLAMA_URL = "http://localhost:11434/v1/chat/completions"
 MODEL_NAME = "qwen2.5:7b"
 
-SYSTEM_PROMPT = """
+# ===============================
+# CHAT 전용 프롬프트 (기존 유지)
+# ===============================
+SYSTEM_PROMPT_CHAT = """
 너는 한국어 사용자 전용 요리 추천 챗봇이다.
 
 ❗ 매우 중요:
@@ -21,11 +25,16 @@ SYSTEM_PROMPT = """
 가 주어진다.
 
 중요 규칙:
-- 이미 확정된 레시피만 언급하라.
+- 이미 확정된 레시피를 자연스럽게 제안하라.
 - 다른 요리를 추천하거나 비교하지 마라.
 - 재료나 조리법을 새로 추측하지 마라.
 - 사용자의 요청을 다시 설명하지 마라.
 - "원하셨는데", "요청에 부합합니다" 같은 메타 설명을 쓰지 마라.
+- 사용자의 의도를 단정하지 말고 제안형으로 말하라.
+- 조사와 띄어쓰기가 자연스러운 문장으로 작성하라.
+- 레시피 이름은 문장 속에서 자연스럽게 언급하라.
+- 사용자 요청에서 언급한 재료나 조건을 부정하거나 약화시키는 표현
+  (예: "~없이도", "~아니어도", "~상관없이")은 절대 사용하지 마라.
 
 출력 규칙:
 - 추천 이유는 **자연스러운 한 문장**으로 작성한다.
@@ -33,33 +42,51 @@ SYSTEM_PROMPT = """
 - 친구에게 말하듯 간단하게 말한다.
 """
 
+# ===============================
+# FRIDGE 전용 프롬프트 (핵심)
+# ===============================
+SYSTEM_PROMPT_FRIDGE = """
+너는 냉장고 재료 기반 요리 추천 도우미다.
+
+❗ 매우 중요:
+- 아래 [사용자 보유 재료]에 있는 재료만 언급하라.
+- 목록에 없는 재료는 절대 언급하지 마라.
+- "있나요?", "추가로 필요해요" 같은 질문을 하지 마라.
+- 재료를 추측하거나 보완하지 마라.
+- 이미 확정된 레시피만 언급하라.
+
+
+출력 규칙:
+- 추천 이유를 자연스러운 한 문장으로만 작성한다.
+- 친구에게 말하듯 간단하게 말한다.
+- 한국어만 사용한다.
+"""
+
+# ===============================
+# 유틸
+# ===============================
 def ensure_korean_only(text: str) -> str:
-    """
-    한글, 숫자, 공백, 기본 문장부호만 허용
-    (외국어/한자/기타 기호 제거)
-    """
+    # 한글, 숫자, 공백, 기본 문장부호만 유지
     return re.sub(r"[^가-힣0-9\s.,!?~]", "", text)
 
-def _summarize_recipe(recipe: dict) -> dict:
-    """
-    LLM #2에 넘길 레시피 요약 정보 생성
-    """
-    ingredients = recipe.get("ingredient", "")
-    main_ings = [i.strip() for i in ingredients.split(",")[:4]]
 
-    return {
-        "name": recipe.get("name"),
-        "main_ingredients": ", ".join(main_ings),
-        "category": " / ".join(recipe.get("category", [])) if recipe.get("category") else ""
-    }
-
-
+# ===============================
+# 응답 생성 함수
+# ===============================
 def generate_response(
     user_query: str,
     recipe: dict,
-    prev_recipe: dict | None = None
+    prev_recipe: Optional[dict] = None,
+    mode: str = "chat",  # "chat" | "fridge"
+    fridge_ingredients: Optional[List[str]] = None,
 ) -> str:
 
+    # 🔹 모드에 따른 SYSTEM PROMPT 선택
+    system_prompt = SYSTEM_PROMPT_CHAT
+    if mode == "fridge":
+        system_prompt = SYSTEM_PROMPT_FRIDGE
+
+    # 🔹 직전 레시피 컨텍스트
     if prev_recipe:
         context_text = f"""
 [직전 추천 레시피]
@@ -68,15 +95,26 @@ def generate_response(
     else:
         context_text = "[직전 추천 레시피]\n없음"
 
+    # 🔹 냉장고 모드일 때만 보유 재료 명시
+    fridge_block = ""
+    if mode == "fridge" and fridge_ingredients:
+        fridge_block = f"""
+[사용자 보유 재료]
+{fridge_ingredients}
+"""
+
+    # 🔹 USER PROMPT
     user_prompt = f"""
 [사용자 요청]
 {user_query}
 
 {context_text}
 
+{fridge_block}
+
 [이번에 확정된 레시피]
-이름: {recipe["name"]}
-주요 재료: {recipe["ingredient"]}
+이름: {recipe.get("name")}
+주요 재료: {recipe.get("ingredient")}
 
 위 정보를 참고해서
 사용자에게 이 레시피를 가볍게 추천하는 한 문장을 써줘.
@@ -87,14 +125,23 @@ def generate_response(
         "temperature": 0.2,
         "stream": False,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
     }
 
-    res = requests.post(OLLAMA_URL, json=body)
-    res.raise_for_status()
+    try:
+        res = requests.post(OLLAMA_URL, json=body, timeout=20)
+        res.raise_for_status()
+        content = res.json()["choices"][0]["message"]["content"].strip()
+    except Exception:
+        content = ""
 
-    content = res.json()["choices"][0]["message"]["content"].strip()
-    content = ensure_korean_only(content)
+    # 🔹 한국어 강제 필터
+    content = ensure_korean_only(content).strip()
+
+    # 🔹 최종 fallback
+    if not content:
+        content = f"{recipe.get('name', '이 요리')} 먹기 딱 좋은 타이밍이에요."
+
     return content

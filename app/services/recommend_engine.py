@@ -10,10 +10,8 @@ from models.recipe_loader import (
 from app.utils.normalize import normalize_query
 
 
-# --------------------------------------------------------
-# DB 카테고리 매핑
-# --------------------------------------------------------
-ALL_CATEGORY_MAP = load_all_recipe_categories()
+
+
 
 # 레시피 임베딩 로드
 recipe_vectors = np.load("models/recipe_vectors.npy")   # (N, 768)
@@ -62,6 +60,8 @@ def recipe_contains_ingredients(recipe_id: int, ingredients: list[str]) -> bool:
 # STEP 1. 후보 필터링 + query 강화
 # --------------------------------------------------------
 def get_candidates(user_query: str, tags: dict):
+    ALL_CATEGORY_MAP = load_all_recipe_categories()
+
     categories = tags.get("category", []) or []
     ingredients = tags.get("ingredients", []) or []
 
@@ -69,6 +69,8 @@ def get_candidates(user_query: str, tags: dict):
     filtered_ids = recipe_ids
     filtered_vecs = recipe_vectors
 
+
+    
     # ----------------------------------------------------
     # 1) category + ingredient 하드 필터
     # ----------------------------------------------------
@@ -79,15 +81,20 @@ def get_candidates(user_query: str, tags: dict):
         new_vecs = []
 
         for rid, vec in zip(recipe_ids, recipe_vectors):
-            # 1-1) 카테고리 필터
-            if target_cat not in ALL_CATEGORY_MAP.get(rid, []):
-                continue
 
-            # 1-2) 🔥 재료 하드 필터 (명시된 경우만)
+            cat_list = ALL_CATEGORY_MAP.get(str(rid), [])
+
+            if categories:
+                if not any(
+                    target_cat in c or c in target_cat
+                    for c in cat_list
+                ):
+                    continue
+
             if ingredients:
                 if not recipe_contains_ingredients(rid, ingredients):
                     continue
-
+            
             new_ids.append(rid)
             new_vecs.append(vec)
 
@@ -95,6 +102,7 @@ def get_candidates(user_query: str, tags: dict):
             filtered_ids = np.array(new_ids)
             filtered_vecs = np.array(new_vecs)
 
+ 
     # ----------------------------------------------------
     # 2) query_text 생성 (semantic boosting)
     # ----------------------------------------------------
@@ -136,10 +144,14 @@ def get_candidates(user_query: str, tags: dict):
     top_idx = np.argsort(scores)[::-1][:k]
     top_ids = list(filtered_ids[top_idx])
     top_scores = list(scores[top_idx])
+    
+    print("🔥 filtered_ids count:", len(filtered_ids))
 
     return top_ids, top_scores
+   
 
 
+    
 # --------------------------------------------------------
 # Softmax
 # --------------------------------------------------------
@@ -149,11 +161,11 @@ def softmax(x):
     return e_x / e_x.sum()
 
 
-# --------------------------------------------------------
-# STEP 2. 최종 추천
-# --------------------------------------------------------
 def get_next_recipe(user_query: str, tags: dict, seen_ids):
 
+    if tags.get("mode") == "fridge":
+        return get_next_recipe_by_fridge(tags, seen_ids)
+    
     user_query = normalize_query(user_query)
     candidates, scores = get_candidates(user_query, tags)
 
@@ -173,12 +185,97 @@ def get_next_recipe(user_query: str, tags: dict, seen_ids):
         filtered_ids = candidates
         filtered_scores = scores
 
-    # 재료가 명확히 2개 이상이면 Top1 고정
+    # 🔥 최종 선택 ID 결정
     if len(tags.get("ingredients", [])) >= 2:
-        return get_recipe_by_id(filtered_ids[0])
+        rid = filtered_ids[0]
+    else:
+        probs = softmax(filtered_scores)
+        rid = np.random.choice(filtered_ids, p=probs)
 
-    # 다양성 확보
-    probs = softmax(filtered_scores)
-    rid = np.random.choice(filtered_ids, p=probs)
+    # ================================
+    # 🔥 여기!!!! (핵심 수정 포인트)
+    # ================================
+    recipe = get_recipe_by_id(rid)
+    print("🔥 RETURN RECIPE =", recipe)
+    if not recipe:
+        return None
 
-    return get_recipe_by_id(rid)
+    # recipe_id 키 보장
+    if "recipe_id" not in recipe and "id" in recipe:
+        recipe["recipe_id"] = recipe["id"]
+
+    return recipe
+
+def get_next_recipe_by_fridge(tags: dict, seen_ids):
+    ingredients = tags.get("ingredients", [])
+    if not ingredients:
+        return None
+
+    INGREDIENT_MAP = {
+        "고기": ["고기", "돼지고기", "소고기", "쇠고기", "닭", "닭고기"],
+        "달걀": ["달걀", "계란"],
+        "계란": ["달걀", "계란"],
+        "파": ["파", "대파", "쪽파"],
+        "고추": ["고추", "청양고추", "홍고추"],
+        "면": ["면", "국수", "라면", "파스타", "짜파게티"],
+        "밥": ["밥", "쌀"],
+        "해산물": ["새우", "오징어", "조개", "게"],
+    }
+
+    def ingredient_match(text: str, ing: str) -> bool:
+        candidates = INGREDIENT_MAP.get(ing, [ing])
+        return any(c in text for c in candidates)
+
+    scored = []
+
+    for rid in recipe_ids:
+        if rid in seen_ids:
+            continue
+
+        recipe = get_recipe_by_id(rid)
+        if not recipe:
+            continue
+
+        text = (
+            (recipe.get("ingredient") or "") + " " +
+            (recipe.get("spicy_ingredient") or "")
+        )
+
+        # 🔹 재료 매칭 개수 (핵심)
+        match_count = sum(
+            ingredient_match(text, ing)
+            for ing in ingredients
+        )
+
+        # ❌ 진짜 하나도 안 맞으면만 탈락
+        if match_count == 0:
+            continue
+
+        # 🔹 면 요리 제약 (면 관련 재료 없으면 제외)
+        if ingredient_match(text, "면") and not any(
+            ing in ["면", "라면", "파스타"] for ing in ingredients
+        ):
+            continue
+
+        # 🔹 점수 = 매칭 개수 (단순하고 안정적)
+        score = match_count
+
+        scored.append((score, rid))
+        print("🧊 FRIDGE FILTER RESULT COUNT =", len(scored))
+
+    if not scored:
+        return None
+
+    # 🔥 점수 높은 것 우선, 동점은 랜덤
+    scored.sort(reverse=True)
+    best_score = scored[0][0]
+    top = [rid for s, rid in scored if s == best_score]
+
+    rid = random.choice(top)
+    recipe = get_recipe_by_id(rid)
+
+    if recipe and "recipe_id" not in recipe and "id" in recipe:
+        recipe["recipe_id"] = recipe["id"]
+
+    print("🔥 FRIDGE RETURN RECIPE =", recipe)
+    return recipe
